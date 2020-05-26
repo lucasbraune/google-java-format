@@ -463,19 +463,66 @@ public final class OpsBuilder {
    */
   public final ImmutableList<Op> build() {
     markForPartialFormat();
-    // Rewrite the ops to insert comments.
+    /* Token ops can have associated non-tokens, including comments, which we need to insert. */
+    Multimap<Integer, Op> tokOps = tokOpsToInsert();
+    /*
+     * Construct new list of ops, splicing in the comments. If a comment is inserted immediately
+     * before a space, suppress the space.
+     */
+    ImmutableList.Builder<Op> newOps = ImmutableList.builder();
+    boolean afterForcedBreak = false; // Was the last Op a forced break? If so, suppress spaces.
+    int opsN = ops.size();
+    for (int i = 0; i < opsN; i++) {
+      for (Op op : tokOps.get(i)) {
+        if (!(afterForcedBreak && op instanceof Doc.Space)) {
+          newOps.add(op);
+          afterForcedBreak = isForcedBreak(op);
+        }
+      }
+      Op op = ops.get(i);
+      if (afterForcedBreak
+          && (op instanceof Doc.Space
+              || (op instanceof Doc.Break
+                  && ((Doc.Break) op).getPlusIndent() == 0
+                  && " ".equals(((Doc) op).getFlat())))) {
+        continue;
+      }
+      newOps.add(op);
+      if (!(op instanceof OpenOp)) {
+        afterForcedBreak = isForcedBreak(op);
+      }
+    }
+    for (Op op : tokOps.get(opsN)) {
+      if (!(afterForcedBreak && op instanceof Doc.Space)) {
+        newOps.add(op);
+        afterForcedBreak = isForcedBreak(op);
+      }
+    }
+    return newOps.build();
+  }
+
+  private static boolean isForcedBreak(Op op) {
+    return op instanceof Doc.Break && ((Doc.Break) op).isForced();
+  }
+
+  /** 
+   * Build lists of nontoken {@code Op}s (representing comments, line breaks and spaces) to be output immediately before each {@link Doc.Token} in the list {@code ops}.
+   * 
+   * @return A multimap sending the index of each {@link Doc.Token} in the list {@code ops} to the 
+   * collection of nontoken {@link Op}s to be output immediately before it.
+   */
+  private final Multimap<Integer, Op> tokOpsToInsert() {
     Multimap<Integer, Op> tokOps = ArrayListMultimap.create();
     int opsN = ops.size();
     for (int i = 0; i < opsN; i++) {
       Op op = ops.get(i);
       if (op instanceof Doc.Token) {
-        /*
-         * Token ops can have associated non-tokens, including comments, which we need to insert.
-         * They can also cause line breaks, so we insert them before or after the current level,
-         * when possible.
-         */
         Doc.Token tokenOp = (Doc.Token) op;
         Input.Token token = tokenOp.getToken();
+        /*
+         * Nontoken Ops can cause line breaks, so we insert them before or after the level of the 
+         * associated Doc.Token, when possible.
+         */
         int j = i; // Where to insert toksBefore before.
         while (0 < j && ops.get(j - 1) instanceof OpenOp) {
           --j;
@@ -524,7 +571,7 @@ public final class OpsBuilder {
           } else if (space) {
             tokOps.put(j, SPACE);
           }
-          // Now we've seen the Token; output the toksAfter.
+          // Output the toksAfter.
           for (Input.Tok tokAfter : token.getToksAfter()) {
             if (tokAfter.isComment()) {
               boolean breakAfter =
@@ -573,43 +620,7 @@ public final class OpsBuilder {
         }
       }
     }
-    /*
-     * Construct new list of ops, splicing in the comments. If a comment is inserted immediately
-     * before a space, suppress the space.
-     */
-    ImmutableList.Builder<Op> newOps = ImmutableList.builder();
-    boolean afterForcedBreak = false; // Was the last Op a forced break? If so, suppress spaces.
-    for (int i = 0; i < opsN; i++) {
-      for (Op op : tokOps.get(i)) {
-        if (!(afterForcedBreak && op instanceof Doc.Space)) {
-          newOps.add(op);
-          afterForcedBreak = isForcedBreak(op);
-        }
-      }
-      Op op = ops.get(i);
-      if (afterForcedBreak
-          && (op instanceof Doc.Space
-              || (op instanceof Doc.Break
-                  && ((Doc.Break) op).getPlusIndent() == 0
-                  && " ".equals(((Doc) op).getFlat())))) {
-        continue;
-      }
-      newOps.add(op);
-      if (!(op instanceof OpenOp)) {
-        afterForcedBreak = isForcedBreak(op);
-      }
-    }
-    for (Op op : tokOps.get(opsN)) {
-      if (!(afterForcedBreak && op instanceof Doc.Space)) {
-        newOps.add(op);
-        afterForcedBreak = isForcedBreak(op);
-      }
-    }
-    return newOps.build();
-  }
-
-  private static boolean isForcedBreak(Op op) {
-    return op instanceof Doc.Break && ((Doc.Break) op).isForced();
+    return tokOps;
   }
 
   private static List<Op> makeComment(Input.Tok comment) {
